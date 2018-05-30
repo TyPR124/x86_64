@@ -1,5 +1,5 @@
-use registers::control::Cr3;
 use instructions::tlb;
+use registers::control::Cr3;
 use structures::paging::page_table::{FrameError, PageTable, PageTableEntry, PageTableFlags};
 use structures::paging::{NotGiantPageSize, Page, PageSize, PhysFrame, Size1Gb, Size2Mb, Size4Kb};
 use ux::u9;
@@ -15,7 +15,7 @@ impl<S: PageSize> MapperFlush<S> {
         MapperFlush(page)
     }
 
-    // Flush 
+    // Flush
     pub fn flush(self) {
         tlb::flush(self.0.start_address());
     }
@@ -38,7 +38,11 @@ pub trait Mapper<S: PageSize> {
     where
         A: FnMut(PhysFrame<S>);
 
-    fn update_flags(&mut self, page: Page<S>, flags: PageTableFlags) -> Result<MapperFlush<S>, FlagUpdateError>;
+    fn update_flags(
+        &mut self,
+        page: Page<S>,
+        flags: PageTableFlags,
+    ) -> Result<MapperFlush<S>, FlagUpdateError>;
 
     fn translate_page(&self, page: Page<S>) -> Option<PhysFrame<S>>;
 }
@@ -75,7 +79,8 @@ impl<'a> RecursivePageTable<'a> {
         let page = Page::containing_address(VirtAddr::new(table as *const _ as u64));
         let recursive_index = page.p4_index();
 
-        if page.p3_index() != recursive_index || page.p2_index() != recursive_index
+        if page.p3_index() != recursive_index
+            || page.p2_index() != recursive_index
             || page.p1_index() != recursive_index
         {
             return Err(NotRecursivelyMapped);
