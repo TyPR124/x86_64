@@ -117,27 +117,38 @@ impl<'a> RecursivePageTable<'a> {
         self.map_to(page, frame, flags, allocator)
     }
 
-    fn create_next_table<A>(
-        entry: &mut PageTableEntry,
+    fn create_next_table<'b, A>(
+        entry: &'b mut PageTableEntry,
+        next_table_page: Page,
         allocator: &mut A,
-    ) -> Result<bool, MapToError>
+    ) -> Result<&'b mut PageTable, MapToError>
     where
         A: FnMut() -> Option<PhysFrame>,
     {
         use structures::paging::PageTableFlags as Flags;
 
+        let created;
+
         if entry.is_unused() {
             if let Some(frame) = allocator() {
                 entry.set_frame(frame, Flags::PRESENT | Flags::WRITABLE);
-                return Ok(true);
+                created = true;
             } else {
                 return Err(MapToError::FrameAllocationFailed);
             }
+        } else {
+            created = false;
         }
         if entry.flags().contains(Flags::HUGE_PAGE) {
             return Err(MapToError::EntryWithInvalidFlagsPresent);
         }
-        Ok(false)
+
+        let page_table_ptr = next_table_page.start_address().as_mut_ptr();
+        let page_table: &mut PageTable = unsafe { &mut *(page_table_ptr) };
+        if created {
+            page_table.zero();
+        }
+        Ok(page_table)
     }
 }
 
@@ -155,11 +166,8 @@ impl<'a> Mapper<Size1Gb> for RecursivePageTable<'a> {
         use structures::paging::PageTableFlags as Flags;
         let p4 = &mut self.p4;
 
-        let p3_created = Self::create_next_table(&mut p4[page.p4_index()], allocator)?;
-        let p3 = unsafe { &mut *(p3_ptr(page, self.recursive_index)) };
-        if p3_created {
-            p3.zero()
-        }
+        let p3_page = p3_page(page, self.recursive_index);
+        let p3 = Self::create_next_table(&mut p4[page.p4_index()], p3_page, allocator)?;
 
         if !p3[page.p3_index()].is_unused() {
             return Err(MapToError::PageAlreadyInUse);
@@ -257,17 +265,11 @@ impl<'a> Mapper<Size2Mb> for RecursivePageTable<'a> {
         use structures::paging::PageTableFlags as Flags;
         let p4 = &mut self.p4;
 
-        let p3_created = Self::create_next_table(&mut p4[page.p4_index()], allocator)?;
-        let p3 = unsafe { &mut *(p3_ptr(page, self.recursive_index)) };
-        if p3_created {
-            p3.zero()
-        }
+        let p3_page = p3_page(page, self.recursive_index);
+        let p3 = Self::create_next_table(&mut p4[page.p4_index()], p3_page, allocator)?;
 
-        let p2_created = Self::create_next_table(&mut p3[page.p3_index()], allocator)?;
-        let p2 = unsafe { &mut *(p2_ptr(page, self.recursive_index)) };
-        if p2_created {
-            p2.zero()
-        }
+        let p2_page = p2_page(page, self.recursive_index);
+        let p2 = Self::create_next_table(&mut p3[page.p3_index()], p2_page, allocator)?;
 
         if !p2[page.p2_index()].is_unused() {
             return Err(MapToError::PageAlreadyInUse);
@@ -384,23 +386,14 @@ impl<'a> Mapper<Size4Kb> for RecursivePageTable<'a> {
     {
         let p4 = &mut self.p4;
 
-        let p3_created = Self::create_next_table(&mut p4[page.p4_index()], allocator)?;
-        let p3 = unsafe { &mut *(p3_ptr(page, self.recursive_index)) };
-        if p3_created {
-            p3.zero()
-        }
+        let p3_page = p3_page(page, self.recursive_index);
+        let p3 = Self::create_next_table(&mut p4[page.p4_index()], p3_page, allocator)?;
 
-        let p2_created = Self::create_next_table(&mut p3[page.p3_index()], allocator)?;
-        let p2 = unsafe { &mut *(p2_ptr(page, self.recursive_index)) };
-        if p2_created {
-            p2.zero()
-        }
+        let p2_page = p2_page(page, self.recursive_index);
+        let p2 = Self::create_next_table(&mut p3[page.p3_index()], p2_page, allocator)?;
 
-        let p1_created = Self::create_next_table(&mut p2[page.p2_index()], allocator)?;
-        let p1 = unsafe { &mut *(p1_ptr(page, self.recursive_index)) };
-        if p1_created {
-            p1.zero()
-        }
+        let p1_page = p1_page(page, self.recursive_index);
+        let p1 = Self::create_next_table(&mut p2[page.p2_index()], p1_page, allocator)?;
 
         if !p1[page.p1_index()].is_unused() {
             return Err(MapToError::PageAlreadyInUse);
@@ -518,31 +511,40 @@ impl<'a> Mapper<Size4Kb> for RecursivePageTable<'a> {
 }
 
 fn p3_ptr<S: PageSize>(page: Page<S>, recursive_index: u9) -> *mut PageTable {
+    p3_page(page, recursive_index).start_address().as_mut_ptr()
+}
+
+fn p3_page<S: PageSize>(page: Page<S>, recursive_index: u9) -> Page {
     Page::from_page_table_indices(
         recursive_index,
         recursive_index,
         recursive_index,
         page.p4_index(),
-    ).start_address()
-        .as_mut_ptr()
+    )
 }
 
 fn p2_ptr<S: NotGiantPageSize>(page: Page<S>, recursive_index: u9) -> *mut PageTable {
+    p2_page(page, recursive_index).start_address().as_mut_ptr()
+}
+
+fn p2_page<S: NotGiantPageSize>(page: Page<S>, recursive_index: u9) -> Page {
     Page::from_page_table_indices(
         recursive_index,
         recursive_index,
         page.p4_index(),
         page.p3_index(),
-    ).start_address()
-        .as_mut_ptr()
+    )
 }
 
 fn p1_ptr(page: Page<Size4Kb>, recursive_index: u9) -> *mut PageTable {
+    p1_page(page, recursive_index).start_address().as_mut_ptr()
+}
+
+fn p1_page(page: Page<Size4Kb>, recursive_index: u9) -> Page {
     Page::from_page_table_indices(
         recursive_index,
         page.p4_index(),
         page.p3_index(),
         page.p2_index(),
-    ).start_address()
-        .as_mut_ptr()
+    )
 }
