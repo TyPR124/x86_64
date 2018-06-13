@@ -16,3 +16,8 @@ script:
   - cargo test
   - cargo build --features deny-warnings
   - RUST_BACKTRACE=1 bootimage test --manifest-path testing/Cargo.toml
+
+addons:
+  apt:
+    packages:
+    - qemu-system-x86
