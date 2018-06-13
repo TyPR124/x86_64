@@ -13,4 +13,4 @@ script:
   - cargo build
   - cargo test
   - cargo build --features deny-warnings
-  - bootimage test --manifest-path testing/Cargo.toml
+  - RUST_BACKTRACE=1 bootimage test --manifest-path testing/Cargo.toml
